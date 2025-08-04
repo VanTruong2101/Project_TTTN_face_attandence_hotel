@@ -63,10 +63,55 @@ def save_guest(name, phone, face_encoding):
     conn.commit()
     conn.close()
 
+def check_existing_guest(face_encoding):
+    conn = sqlite3.connect('database/hotel_guests.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT id, name, phone, status FROM guests')
+    guests = cursor.fetchall()
+    
+    for guest in guests:
+        guest_id, name, phone, status = guest
+        
+        # Get face encoding from DB
+        cursor.execute('SELECT face_encoding FROM guests WHERE id = ?', (guest_id,))
+        stored_encoding = np.frombuffer(cursor.fetchone()[0])
+        
+        # Compare face encodings
+        match = face_recognition.compare_faces([stored_encoding], face_encoding)[0]
+        
+        if match:
+            conn.close()
+            return guest_id, name, phone, status
+            
+    conn.close()
+    return None
+
+def update_guest(guest_id, name, phone, face_encoding):
+    conn = sqlite3.connect('database/hotel_guests.db')
+    cursor = conn.cursor()
+    
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Update guest information
+    cursor.execute('''
+    UPDATE guests 
+    SET name = ?, phone = ?, face_encoding = ?, 
+        checkin_time = ?, status = "checked_in", checkout_time = NULL
+    WHERE id = ?
+    ''', (name, phone, face_encoding.tobytes(), current_time, guest_id))
+    
+    # Update stats
+    cursor.execute('''
+    INSERT INTO stats (action, count, time)
+    VALUES (?, ?, ?)
+    ''', ('check_in', 1, current_time))
+    
+    conn.commit()
+    conn.close()
+
 def main():
     print("=== Guest Check-in System ===")
-    name = input("Enter guest name: ")
-    phone = input("Enter guest phone: ")
     
     print("\nPlease look at the camera and press SPACE to capture...")
     frame = capture_face()
@@ -80,8 +125,41 @@ def main():
     if face_encoding is None:
         print("No face detected in the image!")
         return
+    
+    # Check if guest exists
+    existing_guest = check_existing_guest(face_encoding)
+    
+    if existing_guest:
+        guest_id, name, phone, status = existing_guest
         
-    save_guest(name, phone, face_encoding)
+        if status == "checked_in":
+            print(f"\nGuest {name} is already checked in!")
+            return
+            
+        print(f"\nWelcome back {name}!")
+        print(f"Current Information:")
+        print(f"Name: {name}")
+        print(f"Phone: {phone}")
+        
+        # Ask for name update
+        update_name = input("\nWould you like to update your name? (y/n): ")
+        if update_name.lower() == 'y':
+            name = input("Enter new name: ")
+        
+        # Ask for phone update    
+        update_phone = input("Would you like to update your phone number? (y/n): ")
+        if update_phone.lower() == 'y':
+            phone = input("Enter new phone number: ")
+            
+        # Update existing guest record
+        update_guest(guest_id, name, phone, face_encoding)
+        
+    else:
+        # New guest registration
+        name = input("Enter guest name: ")
+        phone = input("Enter guest phone: ")
+        save_guest(name, phone, face_encoding)
+    
     print(f"\nGuest {name} checked in successfully!")
 
 if __name__ == "__main__":
