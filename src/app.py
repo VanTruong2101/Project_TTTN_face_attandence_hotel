@@ -7,69 +7,110 @@ from check_in import get_face_encoding, save_guest, check_existing_guest, update
 from check_out import update_checkout, get_checked_in_guests
 import sqlite3
 from datetime import datetime
+import time
 
-def get_stats():
+def get_current_stats():
     conn = sqlite3.connect('database/hotel_guests.db')
     cursor = conn.cursor()
     
-    # Get current date info
+    # Get current date
     current_date = datetime.now().strftime('%Y-%m-%d')
-    current_month = datetime.now().strftime('%Y-%m')
-    current_year = datetime.now().strftime('%Y')
     
-    # Daily stats
+    # Get number of currently present guests
+    cursor.execute('SELECT COUNT(*) FROM guests WHERE status = "checked_in"')
+    current_present = cursor.fetchone()[0]
+    
+    # Get today's check-ins
     cursor.execute('''
-    SELECT action, COUNT(*) as count
-    FROM stats 
-    WHERE date(time) = date(?)
-    GROUP BY action
+    SELECT COUNT(*) FROM stats 
+    WHERE action = "check_in" AND date(time) = date(?)
     ''', (current_date,))
-    daily_stats = dict(cursor.fetchall())
+    total_checkins = cursor.fetchone()[0]
     
-    # Weekly stats (last 7 days)
+    # Get today's check-outs
     cursor.execute('''
-    SELECT action, COUNT(*) as count
-    FROM stats 
-    WHERE date(time) >= date(?, '-6 days')
-    GROUP BY action
+    SELECT COUNT(*) FROM stats 
+    WHERE action = "check_out" AND date(time) = date(?)
     ''', (current_date,))
-    weekly_stats = dict(cursor.fetchall())
+    total_checkouts = cursor.fetchone()[0]
     
-    # Monthly stats
+    # Get current present guests details
     cursor.execute('''
-    SELECT action, COUNT(*) as count
-    FROM stats 
-    WHERE strftime('%Y-%m', time) = ?
-    GROUP BY action
-    ''', (current_month,))
-    monthly_stats = dict(cursor.fetchall())
-    
-    # Yearly stats
-    cursor.execute('''
-    SELECT action, COUNT(*) as count
-    FROM stats 
-    WHERE strftime('%Y', time) = ?
-    GROUP BY action
-    ''', (current_year,))
-    yearly_stats = dict(cursor.fetchall())
+    SELECT name, checkin_time 
+    FROM guests 
+    WHERE status = "checked_in"
+    ORDER BY checkin_time DESC
+    ''')
+    present_guests = cursor.fetchall()
     
     conn.close()
-    return {
-        'daily': daily_stats,
-        'weekly': weekly_stats,
-        'monthly': monthly_stats,
-        'yearly': yearly_stats
-    }
+    return current_present, total_checkins, total_checkouts, present_guests
 
 def main():
-    st.set_page_config(page_title="Hotel Face Recognition System")
+    st.set_page_config(
+        page_title="Hotel Face Recognition System",
+        layout="wide"  # Use wide layout for better dashboard view
+    )
     
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "Check In", "Check Out", "Statistics"])
+    page = st.sidebar.radio("Go to", ["Dashboard", "Check In", "Check Out"])
     
-    if page == "Home":
-        st.title("Hotel Face Recognition System")
-        st.write("Welcome! Please select an option from the sidebar.")
+    if page == "Dashboard":
+        st.title("Hotel Face Recognition Dashboard")
+        
+        # Get real-time stats
+        current_present, total_checkins, total_checkouts, present_guests = get_current_stats()
+        
+        # KPI Cards in columns
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Currently Present",
+                current_present,
+                delta=None,
+                help="Number of guests currently in the hotel"
+            )
+            
+        with col2:
+            st.metric(
+                "Today's Check-ins",
+                total_checkins,
+                delta=None,
+                help="Total check-ins today"
+            )
+            
+        with col3:
+            st.metric(
+                "Today's Check-outs",
+                total_checkouts,
+                delta=None,
+                help="Total check-outs today"
+            )
+        
+        # Present Guests Table
+        st.subheader("Currently Present Guests")
+        if present_guests:
+            df_guests = pd.DataFrame(
+                present_guests,
+                columns=['Guest Name', 'Check-in Time']
+            )
+            # Convert check-in time to more readable format
+            df_guests['Check-in Time'] = pd.to_datetime(df_guests['Check-in Time']).dt.strftime('%Y-%m-%d %H:%M')
+            st.dataframe(
+                df_guests,
+                column_config={
+                    "Guest Name": st.column_config.TextColumn("Guest Name", width="medium"),
+                    "Check-in Time": st.column_config.TextColumn("Check-in Time", width="medium")
+                },
+                hide_index=True,
+            )
+        else:
+            st.info("No guests currently present in the hotel")
+        
+        st.empty()
+        time.sleep(5)  # Refresh every 5 seconds
+        st.rerun()
         
     elif page == "Check In":
         st.title("Guest Check-In")
@@ -155,61 +196,7 @@ def main():
             else:
                 st.error("No face detected in the image!")
                 
-    elif page == "Statistics":
-        st.title("Statistics")
-        stats_data = get_stats()
-        
-        # Add time period selector
-        period = st.selectbox(
-            "Select Time Period",
-            ["Daily", "Weekly", "Monthly", "Yearly"]
-        )
-        
-        if period == "Daily":
-            stats = stats_data['daily']
-            period_text = "Today"
-        elif period == "Weekly":
-            stats = stats_data['weekly']
-            period_text = "Last 7 Days"
-        elif period == "Monthly":
-            stats = stats_data['monthly']
-            period_text = "This Month"
-        else:
-            stats = stats_data['yearly']
-            period_text = "This Year"
-            
-        st.subheader(f"Statistics for {period_text}")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(
-                f"Check-ins ({period_text})", 
-                stats.get('check_in', 0),
-            )
-        with col2:
-            st.metric(
-                f"Check-outs ({period_text})", 
-                stats.get('check_out', 0),
-            )
-        
-        # Add chart
-        if stats:
-            chart_data = pd.DataFrame({
-                'Action': ['Check-ins', 'Check-outs'],
-                'Count': [stats.get('check_in', 0), stats.get('check_out', 0)]
-            })
-            st.bar_chart(chart_data.set_index('Action'))
-            
-        # Add detailed table
-        st.subheader("Detailed Statistics")
-        details = []
-        for period_type, period_stats in stats_data.items():
-            details.append({
-                'Period': period_type.capitalize(),
-                'Check-ins': period_stats.get('check_in', 0),
-                'Check-outs': period_stats.get('check_out', 0)
-            })
-        st.table(pd.DataFrame(details))
+
 
 if __name__ == '__main__':
     main()
