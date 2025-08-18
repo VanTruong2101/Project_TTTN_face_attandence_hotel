@@ -54,11 +54,12 @@ def save_guest(name, phone, face_encoding):
     VALUES (?, ?, ?, ?, ?)
     ''', (name, phone, face_encoding.tobytes(), current_time, 'checked_in'))
     
-    # Update stats
+    guest_id = cursor.lastrowid
+    
     cursor.execute('''
-    INSERT INTO stats (action, count, time)
-    VALUES (?, ?, ?)
-    ''', ('check_in', 1, current_time))
+    INSERT INTO stats (guest_id, action, count, time)
+    VALUES (?, ?, ?, ?)
+    ''', (guest_id, 'check_in', 1, current_time))
     
     conn.commit()
     conn.close()
@@ -77,12 +78,20 @@ def check_existing_guest(face_encoding):
         cursor.execute('SELECT face_encoding FROM guests WHERE id = ?', (guest_id,))
         stored_encoding = np.frombuffer(cursor.fetchone()[0])
         
-        # Compare face encodings
         match = face_recognition.compare_faces([stored_encoding], face_encoding)[0]
         
         if match:
+            # Get guest history without guest_id
+            cursor.execute('''
+            SELECT action, time 
+            FROM stats 
+            WHERE guest_id = ?
+            ORDER BY time DESC
+            ''', (guest_id,))
+            history = cursor.fetchall()
+            
             conn.close()
-            return guest_id, name, phone, status
+            return guest_id, name, phone, status, history
             
     conn.close()
     return None
@@ -101,11 +110,11 @@ def update_guest(guest_id, name, phone, face_encoding):
     WHERE id = ?
     ''', (name, phone, face_encoding.tobytes(), current_time, guest_id))
     
-    # Update stats
+    # Add check-in record to stats with guest_id
     cursor.execute('''
-    INSERT INTO stats (action, count, time)
-    VALUES (?, ?, ?)
-    ''', ('check_in', 1, current_time))
+    INSERT INTO stats (guest_id, action, count, time)
+    VALUES (?, ?, ?, ?)
+    ''', (guest_id, 'check_in', 1, current_time))
     
     conn.commit()
     conn.close()
@@ -130,7 +139,7 @@ def main():
     existing_guest = check_existing_guest(face_encoding)
     
     if existing_guest:
-        guest_id, name, phone, status = existing_guest
+        guest_id, name, phone, status, history = existing_guest
         
         if status == "checked_in":
             print(f"\nGuest {name} is already checked in!")
@@ -140,6 +149,12 @@ def main():
         print(f"Current Information:")
         print(f"Name: {name}")
         print(f"Phone: {phone}")
+        
+        # Display guest history
+        print("\nYour recent check-in/check-out history:")
+        for record in history:
+            action, time = record
+            print(f"- {action} at {time}")
         
         # Ask for name update
         update_name = input("\nWould you like to update your name? (y/n): ")

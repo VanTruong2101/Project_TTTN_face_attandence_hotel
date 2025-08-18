@@ -8,44 +8,59 @@ from check_out import update_checkout, get_checked_in_guests
 import sqlite3
 from datetime import datetime
 import time
+import os
 
 def get_current_stats():
-    conn = sqlite3.connect('database/hotel_guests.db')
-    cursor = conn.cursor()
-    
-    # Get current date
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    
-    # Get number of currently present guests
-    cursor.execute('SELECT COUNT(*) FROM guests WHERE status = "checked_in"')
-    current_present = cursor.fetchone()[0]
-    
-    # Get today's check-ins
-    cursor.execute('''
-    SELECT COUNT(*) FROM stats 
-    WHERE action = "check_in" AND date(time) = date(?)
-    ''', (current_date,))
-    total_checkins = cursor.fetchone()[0]
-    
-    # Get today's check-outs
-    cursor.execute('''
-    SELECT COUNT(*) FROM stats 
-    WHERE action = "check_out" AND date(time) = date(?)
-    ''', (current_date,))
-    total_checkouts = cursor.fetchone()[0]
-    
-    # Get current present guests details
-    cursor.execute('''
-    SELECT name, checkin_time 
-    FROM guests 
-    WHERE status = "checked_in"
-    ORDER BY checkin_time DESC
-    ''')
-    present_guests = cursor.fetchall()
-    
-    conn.close()
-    return current_present, total_checkins, total_checkouts, present_guests
-
+    try:
+        # Get absolute path to database
+        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'database', 'hotel_guests.db')
+        
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"Database not found at {db_path}")
+            
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get current date
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Add error handling for each query
+        try:
+            cursor.execute('SELECT COUNT(*) FROM guests WHERE status = "checked_in"')
+            current_present = cursor.fetchone()[0]
+            
+            cursor.execute('''
+            SELECT COUNT(*) FROM stats 
+            WHERE action = "check_in" AND date(time) = date(?)
+            ''', (current_date,))
+            total_checkins = cursor.fetchone()[0]
+            
+            cursor.execute('''
+            SELECT COUNT(*) FROM stats 
+            WHERE action = "check_out" AND date(time) = date(?)
+            ''', (current_date,))
+            total_checkouts = cursor.fetchone()[0]
+            
+            cursor.execute('''
+            SELECT name, checkin_time 
+            FROM guests 
+            WHERE status = "checked_in"
+            ORDER BY checkin_time DESC
+            ''')
+            present_guests = cursor.fetchall()
+            
+            return current_present, total_checkins, total_checkouts, present_guests
+            
+        except sqlite3.Error as e:
+            st.error(f"Database error: {e}")
+            return 0, 0, 0, []
+            
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return 0, 0, 0, []
+    finally:
+        if 'conn' in locals():
+            conn.close()
 def main():
     st.set_page_config(
         page_title="Hotel Face Recognition System",
@@ -131,11 +146,36 @@ def main():
                 existing_guest = check_existing_guest(face_encoding)
                 
                 if existing_guest:
-                    guest_id, name, phone, status = existing_guest
+                    guest_id, name, phone, status, history = existing_guest
                     if status == "checked_in":
                         st.error(f"Guest {name} is already checked in!")
                     else:
                         st.success(f"Welcome back {name}!")
+                        
+                        # Display guest history
+                        st.subheader("Guest History")
+                        if history:
+                            df_history = pd.DataFrame(
+                                history,
+                                columns=['Action', 'Time']  # Remove Guest ID from columns
+                            )
+                            # Convert time to more readable format
+                            df_history['Time'] = pd.to_datetime(df_history['Time']).dt.strftime('%Y-%m-%d %H:%M')
+                            df_history['Action'] = df_history['Action'].map({
+                                'check_in': 'Check In',
+                                'check_out': 'Check Out'
+                            })
+                            st.dataframe(
+                                df_history,
+                                column_config={
+                                    "Action": st.column_config.TextColumn("Action", width="medium"),
+                                    "Time": st.column_config.TextColumn("Time", width="medium")
+                                },
+                                hide_index=True,
+                            )
+                        else:
+                            st.info("No history available")
+                            
                         update_name = st.checkbox("Update name?")
                         if update_name:
                             name = st.text_input("New name", name)
@@ -143,7 +183,6 @@ def main():
                         if update_phone:
                             phone = st.text_input("New phone", phone)
                         if st.button("Confirm Check In"):
-                            # Use update_guest instead of save_guest
                             update_guest(guest_id, name, phone, face_encoding)
                             st.success(f"Guest {name} checked in successfully!")
                 else:

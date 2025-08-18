@@ -27,11 +27,11 @@ def update_checkout(guest_id):
     WHERE id = ?
     ''', (current_time, guest_id))
     
-    # Update stats
+    # Add check-out record to stats with guest_id
     cursor.execute('''
-    INSERT INTO stats (action, count, time)
-    VALUES (?, ?, ?)
-    ''', ('check_out', 1, current_time))
+    INSERT INTO stats (guest_id, action, count, time)
+    VALUES (?, ?, ?, ?)
+    ''', (guest_id, 'check_out', 1, current_time))
     
     conn.commit()
     conn.close()
